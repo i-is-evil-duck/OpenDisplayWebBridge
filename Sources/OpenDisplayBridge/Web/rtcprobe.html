@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WebRTC probe</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #000; color: #ddd; font: 13px ui-monospace, monospace; }
+  #wrap { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  video { max-width: 100vw; max-height: 100vh; }
+  #log { position: fixed; top: 4px; left: 6px; z-index: 9; white-space: pre;
+         text-shadow: 0 1px 2px #000; color: #0f0; }
+  .bad { color: #ff453a; }
+</style>
+</head>
+<body>
+<div id="wrap"><video id="v" autoplay playsinline muted></video></div>
+<div id="log">starting…</div>
+<script>
+// WebRTC spike probe (WEBRTC_PLAN.md W0.3).
+//
+// The assertion is on DECODED FRAMES, not ontrack. A codec mismatch or a failed
+// encoder still fires ontrack and leaves a permanently black <video>, so a
+// test that stops at ontrack can pass while nothing works.
+const v = document.getElementById('v');
+const logEl = document.getElementById('log');
+const S = { frames: 0, firstFrameAt: 0, started: 0, done: false };
+
+function log(msg, bad) {
+  logEl.textContent += '\n' + msg;
+  if (bad) logEl.classList.add('bad');
+  window.__probeLog = logEl.textContent;
+}
+
+log('userAgent: ' + navigator.userAgent);
+log('RTCPeerConnection: ' + (typeof RTCPeerConnection !== 'undefined'));
+
+const pc = new RTCPeerConnection({ iceServers: [] });   // LAN only, no STUN
+
+pc.ontrack = (e) => {
+  log('ontrack: ' + e.track.kind + ' ' + e.track.id);
+  v.srcObject = e.streams[0];
+  v.play().catch(err => log('play() failed: ' + err.message, true));
+};
+pc.oniceconnectionstatechange = () => log('iceConnectionState: ' + pc.iceConnectionState);
+pc.onicegatheringstatechange = () => log('iceGatheringState: ' + pc.iceGatheringState);
+pc.onconnectionstatechange = () => log('connectionState: ' + pc.connectionState);
+
+v.addEventListener('loadedmetadata', () => log('loadedmetadata ' + v.videoWidth + 'x' + v.videoHeight));
+
+// Count real decoded frames via requestVideoFrameCallback where available,
+// falling back to timeupdate.
+if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) {
+  const onFrame = (now, meta) => {
+    S.frames++;
+    if (!S.firstFrameAt) {
+      S.firstFrameAt = now;
+      log('FIRST FRAME after ' + Math.round(now - S.started) + 'ms, presented=' + meta.presentedFrames);
+    }
+    if (S.frames % 15 === 0) log('frames: ' + S.frames);
+    v.requestVideoFrameCallback(onFrame);
+  };
+  v.requestVideoFrameCallback(onFrame);
+} else {
+  v.addEventListener('timeupdate', () => {
+    S.frames++;
+    if (!S.firstFrameAt) { S.firstFrameAt = 1; log('FIRST FRAME (timeupdate fallback)'); }
+  });
+}
+
+(async function () {
+  try {
+    S.started = performance.now();
+    v.addEventListener('loadeddata', () => log('loadeddata'));
+
+    // Offer with a VP8 recvonly transceiver, so the negotiation is explicit
+    // rather than depending on whichever codec libwebrtc picks.
+    pc.addTransceiver('video', { direction: 'recvonly' });
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    // Non-trickle: wait for gathering to finish so the offer carries candidates.
+    if (pc.iceGatheringState !== 'complete') {
+      await new Promise((res) => {
+        const t = setInterval(() => {
+          if (pc.iceGatheringState === 'complete') { clearInterval(t); res(); }
+        }, 100);
+        setTimeout(() => { clearInterval(t); res(); }, 6000);
+      });
+    }
+    log('offer ready, gathering=' + pc.iceGatheringState);
+
+    const r = await fetch('/rtc/offer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sdp: pc.localDescription.sdp }),
+    });
+    const body = await r.json();
+    if (!body.ok) { log('answer failed: ' + JSON.stringify(body), true); return; }
+    log('answer received, ' + body.sdp.length + ' bytes');
+
+    await pc.setRemoteDescription({ type: 'answer', sdp: body.sdp });
+    log('setRemoteDescription done');
+  } catch (err) {
+    log('ERROR: ' + err.message, true);
+  }
+})();
+
+// Expose a verdict the harness can read without parsing the log.
+window.__probe = () => ({
+  frames: S.frames,
+  firstFrameMs: S.firstFrameAt ? Math.round(S.firstFrameAt - S.started) : null,
+  connectionState: pc.connectionState,
+  iceConnectionState: pc.iceConnectionState,
+  videoWidth: v.videoWidth,
+  videoHeight: v.videoHeight,
+  pass: S.frames > 0 && v.videoWidth > 0,
+});
+</script>
+</body>
+</html>
