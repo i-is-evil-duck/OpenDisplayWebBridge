@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>OpenDisplay</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: #000; color: #eee; overflow: hidden;
+               font-family: -apple-system, system-ui, sans-serif;
+               -webkit-user-select: none; user-select: none;
+               -webkit-tap-highlight-color: transparent; }
+  #app { position: fixed; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: center; justify-content: center; }
+
+  /* Pairing view */
+  #pair-view { text-align: center; max-width: 420px; padding: 24px; }
+  #pair-view h1 { font-size: 22px; margin-bottom: 8px; }
+  #pair-view p { color: #999; font-size: 14px; margin-bottom: 20px; }
+  #code-input { font-size: 32px; letter-spacing: 12px; text-align: center;
+                width: 220px; padding: 10px; border-radius: 12px;
+                background: #1c1c1e; color: #fff; border: 1px solid #333;
+                -webkit-user-select: text; user-select: text; }
+  #pair-btn { display: block; margin: 16px auto 0; font-size: 18px; padding: 12px 48px;
+              border-radius: 12px; border: 0; background: #0a84ff; color: #fff; }
+  #pair-btn:active { background: #0066cc; }
+  #pair-error { color: #ff453a; font-size: 14px; min-height: 20px; margin-top: 12px; }
+
+  /* Display view */
+  #display-view { position: fixed; top: 0; right: 0; bottom: 0; left: 0; display: none; background: #000; }
+  #stage { position: absolute; top: 0; right: 0; bottom: 0; left: 0; touch-action: none; }
+  #screen { position: absolute; top: 0; right: 0; bottom: 0; left: 0; width: 100%; height: 100%; }
+  #cursor { position: absolute; display: none; pointer-events: none; z-index: 5; }
+  #stats { position: absolute; top: 4px; left: 6px; z-index: 10; font-size: 11px;
+           font-family: ui-monospace, monospace; color: #0f0; opacity: 0.85;
+           pointer-events: none; text-shadow: 0 1px 2px #000; white-space: pre; }
+  #status-banner { position: absolute; top: 40%; left: 0; right: 0; z-index: 20;
+                   text-align: center; font-size: 15px; color: #ffd60a; display: none;
+                   text-shadow: 0 1px 3px #000; }
+  #fs-btn { position: absolute; top: 4px; right: 6px; z-index: 10; font-size: 12px;
+            background: rgba(40,40,45,.7); color: #ccc; border: 0; border-radius: 8px;
+            padding: 6px 10px; }
+  #gear-btn { position: absolute; top: 4px; right: 44px; z-index: 10; font-size: 12px;
+              background: rgba(40,40,45,.7); color: #ccc; border: 0; border-radius: 8px;
+              padding: 6px 10px; }
+
+  /* Settings sheet. Anchored to the right edge rather than centred, so it stays
+     usable on the small viewports this actually runs on, and opaque because it
+     has to remain legible over video. */
+  #settings { position: absolute; top: 0; right: 0; bottom: 0; z-index: 30;
+              width: 250px; max-width: 78%; background: rgba(18,18,22,.95);
+              color: #ddd; font-size: 13px; padding: 14px 16px; overflow-y: auto;
+              display: none; box-shadow: -2px 0 12px rgba(0,0,0,.5);
+              /* The stage sets `touch-action: none` so drags reach the input
+                 path rather than scrolling the page. The panel is chrome, not
+                 screen, so it opts back into vertical panning — otherwise it
+                 cannot be scrolled on a short viewport. */
+              touch-action: pan-y; }
+  #settings h2 { font-size: 14px; margin: 0 0 12px; color: #fff; font-weight: 600; }
+  #settings .row { margin: 0 0 16px; }
+  #settings label { display: block; margin-bottom: 6px; color: #aaa;
+                    text-transform: uppercase; font-size: 10px; letter-spacing: .06em; }
+  #settings .hint { color: #777; font-size: 11px; margin-top: 5px; line-height: 1.4; }
+  #settings .seg { display: flex; gap: 4px; }
+  #settings .seg button { flex: 1; background: #2a2a32; color: #bbb; border: 0;
+                          border-radius: 6px; padding: 8px 0; font-size: 12px; }
+  #settings .seg button.on { background: #0a84ff; color: #fff; }
+  #settings .toggle { display: flex; align-items: center; justify-content: space-between;
+                      background: #2a2a32; border-radius: 6px; padding: 9px 12px; }
+  #settings .toggle .sw { width: 40px; height: 22px; border-radius: 11px; background: #444;
+                          position: relative; }
+  #settings .toggle .sw::after { content: ''; position: absolute; top: 2px; left: 2px;
+                                width: 18px; height: 18px; border-radius: 50%;
+                                background: #fff; }
+  #settings .toggle.on .sw { background: #0a84ff; }
+  #settings .toggle.on .sw::after { left: 20px; }
+  #settings .act { width: 100%; background: #2a2a32; color: #ddd; border: 0;
+                   border-radius: 6px; padding: 10px 0; font-size: 13px; }
+  #settings .act:active { background: #3a3a44; }
+  #settings .val { color: #8e8e98; font-size: 11px; margin-top: 5px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="pair-view">
+    <h1>OpenDisplay</h1>
+    <p>Enter the 6-digit pairing code shown on your Mac.</p>
+    <input id="code-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" placeholder="••••••">
+    <button id="pair-btn">Connect</button>
+    <div id="pair-error"></div>
+  </div>
+
+  <div id="display-view">
+    <!-- The input surface. Deliberately contains only what a drag should act on
+         — the canvas (passthrough) and the video element (WebRTC) — plus the
+         cursor, which is not interactive.
+
+         The controls used to live in here, nested inside the surface. That was a
+         structural mistake: a `pointerdown` on a button bubbles to the stage, and
+         a pointerup landing even a pixel off the button makes the browser fire
+         `click` on the nearest common ancestor — the stage — so the button never
+         receives it. The symptom is a UI that visibly reacts and then does
+         nothing, on every tap. They are siblings of the stage instead, so nothing
+         in the input path can intercept them. -->
+    <div id="stage">
+      <canvas id="screen"></canvas>
+      <img id="cursor" alt="">
+    </div>
+
+    <div id="status-banner"></div>
+    <div id="stats"></div>
+    <button id="gear-btn" aria-label="Settings">⚙</button>
+    <button id="fs-btn" aria-label="Fullscreen">⤢</button>
+
+    <div id="settings">
+        <h2>Settings</h2>
+
+        <div class="row">
+          <label>Debug info</label>
+          <div class="toggle" id="set-debug">
+            <span>Show overlay</span><span class="sw"></span>
+          </div>
+          <div class="hint">Frame rate, bitrate and the active video path. Useful
+            when something looks wrong; off by default.</div>
+        </div>
+
+        <div class="row">
+          <label>Resolution</label>
+          <div class="seg" id="set-res">
+            <button data-m="1">1×</button>
+            <button data-m="2">2×</button>
+            <button data-m="3">3×</button>
+            <button data-m="4">4×</button>
+          </div>
+          <div class="val" id="set-res-val">—</div>
+          <div class="hint">Raises the ceiling on the resolution the Mac encodes
+            at. Two things bound it: the Mac's screen, past which a higher
+            setting changes nothing, and the Mac's CPU, because VP8 is encoded in
+            software — so 3× and 4× trade frame rate for sharpness. On the iPad
+            that means 720p, 1080p and 1440p respectively.</div>
+        </div>
+
+        <div class="row">
+          <button class="act" id="set-refresh">Reload session</button>
+          <div class="hint">Re-pairs and renegotiates. Useful if the picture
+            stalls or the path is wrong.</div>
+        </div>
+
+        <div class="row">
+          <button class="act" id="set-close">Close</button>
+        </div>
+    </div>
+  </div>
+</div>
+<script src="/receiver.js"></script>
+</body>
+</html>

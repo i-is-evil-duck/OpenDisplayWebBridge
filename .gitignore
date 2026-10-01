@@ -1,0 +1,20 @@
+
+# Local scratch
+# SwiftPM
+# SwiftPM binary artifacts (WebRTC xcframework, ~45 MB)
+# Xcode
+# macOS
+*.log
+*.xcodeproj/
+*.xcworkspace/
+.DS_Store
+.build/
+.swiftpm/
+/tmp/
+DerivedData/
+Package.resolved
+build/
+xcuserdata/
+
+# Locally built third-party libraries (tools/build-openh264.sh)
+vendor/
